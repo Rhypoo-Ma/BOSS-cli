@@ -1,0 +1,48 @@
+# Binaries
+BOSS-cli
+BOSS-cli-new
+BOSS-cli-old
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Build artifacts
+dist/
+build/
+
+# Logs
+*.log
+
+# Runtime state (user-specific)
+screen_loop_sent.json
+screen_loop_config.json
+scripts/screen_loop_config.json
+scripts/screen_loop_sent.json
+daily_github_trending_results.json
+*.state.json
+
+# Output directories
+resumes/
+output/
+
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Go
+vendor/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
