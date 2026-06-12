@@ -39,6 +39,11 @@ type Edu struct {
 
 // OpenOnlineResume clicks the candidate and opens the online resume dialog.
 func OpenOnlineResume(client *browser.Client, name string) error {
+	// Step 0: clean up any leftover resume dialogs from previous operations
+	if err := cleanupResumeDialogs(client); err != nil {
+		// Non-fatal; continue opening
+	}
+
 	// Step 1: click candidate in the list
 	if err := clickCandidateByName(client, name); err != nil {
 		return err
@@ -77,38 +82,28 @@ func OpenOnlineResume(client *browser.Client, name string) error {
 
 // CloseOnlineResume closes the currently active online resume dialog.
 func CloseOnlineResume(client *browser.Client) error {
+	return cleanupResumeDialogs(client)
+}
+
+// cleanupResumeDialogs hides all resume dialogs, including leftover ones.
+func cleanupResumeDialogs(client *browser.Client) error {
 	code := `(function(){
 		return new Promise(function(resolve){
-			var wrap = document.querySelector('.dialog-wrap.active');
-			if (!wrap) {
-				var dialogs = document.querySelectorAll('.resume-container, .resume-common-dialog');
-				if (!dialogs.length) {
-					resolve(JSON.stringify({closed: false, reason: 'no dialog found'}));
-					return;
+			var wraps = document.querySelectorAll('.dialog-wrap');
+			for (var i = 0; i < wraps.length; i++) {
+				wraps[i].classList.remove('active');
+				wraps[i].classList.add('deactive');
+				wraps[i].style.display = 'none';
+				var d = wraps[i].querySelector('.resume-common-dialog, .resume-container, .boss-dialog__wrapper');
+				if (d) {
+					d.style.display = 'none';
+					d.style.visibility = 'hidden';
+					d.style.opacity = '0';
 				}
-				wrap = dialogs[dialogs.length - 1].parentElement;
 			}
-			var dialog = wrap.querySelector('.resume-common-dialog, .resume-container, .boss-dialog__wrapper');
-			if (!dialog) {
-				resolve(JSON.stringify({closed: false, reason: 'no dialog found'}));
-				return;
-			}
-
-			var closeBtn = dialog.querySelector('.close-btn');
-			if (closeBtn) {
-				HTMLElement.prototype.click.call(closeBtn);
-			}
-
 			setTimeout(function(){
-				var w = document.querySelector('.dialog-wrap.active');
-				if (w) {
-					w.classList.remove('active');
-					w.classList.add('deactive');
-					var d = w.querySelector('.resume-common-dialog, .boss-dialog__wrapper');
-					if (d) d.style.display = 'none';
-				}
-				resolve(JSON.stringify({closed: true}));
-			}, 300);
+				resolve(JSON.stringify({cleaned: wraps.length}));
+			}, 100);
 		});
 	})()`
 
@@ -117,11 +112,11 @@ func CloseOnlineResume(client *browser.Client) error {
 		return fmt.Errorf("close dialog failed: %w", err)
 	}
 	var result struct {
-		Closed bool   `json:"closed"`
-		Reason string `json:"reason,omitempty"`
+		Cleaned int    `json:"cleaned"`
+		Reason  string `json:"reason,omitempty"`
 	}
 	json.Unmarshal(raw, &result)
-	if !result.Closed {
+	if result.Reason != "" {
 		return fmt.Errorf(result.Reason)
 	}
 	return nil
