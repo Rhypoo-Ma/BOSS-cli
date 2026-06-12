@@ -1,11 +1,12 @@
 package boss
 
 import (
-	"github.com/Rhypoo-Ma/BOSS-cli/browser"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/Rhypoo-Ma/BOSS-cli/browser"
 )
 
 type Job struct {
@@ -15,13 +16,23 @@ type Job struct {
 	Closed   bool   `json:"closed,omitempty"`
 }
 
+// jobDropdownSelector returns a JavaScript expression that tries multiple selectors.
+func jobDropdownSelector() string {
+	return `document.querySelector('.chat-select-job, .ui-dropmenu-label, [class*="job-select"], [class*="select-job"], .job-dropdown')`
+}
+
+// jobItemSelector returns a JavaScript expression that matches job items in the dropdown.
+func jobItemSelector() string {
+	return `document.querySelectorAll('.ui-dropmenu-item, .dropdown-item, [class*="dropmenu"] li, [class*="dropdown"] li, .select-job-list li, [class*="job-select"] li, [class*="job-dropdown"] li')`
+}
+
 func ListJobs(client *browser.Client) ([]Job, error) {
 	// Click the job dropdown to expand it
-	clickCode := `(function(){
-		var el = document.querySelector('.chat-select-job, .ui-dropmenu-label, [class*="job-select"]');
+	clickCode := fmt.Sprintf(`(function(){
+		var el = %s;
 		if (el) { el.click(); return JSON.stringify({clicked:true}); }
 		return JSON.stringify({clicked:false});
-	})()`
+	})()`, jobDropdownSelector())
 
 	raw, err := client.EvaluateValue(clickCode)
 	if err != nil {
@@ -32,12 +43,15 @@ func ListJobs(client *browser.Client) ([]Job, error) {
 	}
 	json.Unmarshal(raw, &clickResult)
 	if clickResult.Clicked {
-		time.Sleep(3 * time.Second)
+		// Wait for dropdown items to render
+		if err := client.WaitFor(fmt.Sprintf(`%s.length > 0`, jobItemSelector()), 5*time.Second, 200*time.Millisecond); err != nil {
+			return nil, fmt.Errorf("dropdown did not open: %w", err)
+		}
 	}
 
 	// Extract job list items
-	listCode := `(function(){
-		var items = document.querySelectorAll('.ui-dropmenu-item, .dropdown-item, [class*="dropmenu"] li, [class*="dropdown"] li, .select-job-list li');
+	listCode := fmt.Sprintf(`(function(){
+		var items = %s;
 		var jobs = [];
 		for (var i = 0; i < items.length; i++) {
 			var t = items[i].textContent.trim();
@@ -46,7 +60,7 @@ func ListJobs(client *browser.Client) ([]Job, error) {
 			}
 		}
 		return JSON.stringify(jobs);
-	})()`
+	})()`, jobItemSelector())
 
 	raw, err = client.EvaluateValue(listCode)
 	if err != nil {
@@ -60,7 +74,6 @@ func ListJobs(client *browser.Client) ([]Job, error) {
 
 	var jobs []Job
 	for _, text := range texts {
-		// Skip user menu items
 		if isUserMenuItem(text) {
 			continue
 		}
@@ -73,12 +86,18 @@ func ListJobs(client *browser.Client) ([]Job, error) {
 }
 
 func SwitchJob(client *browser.Client, jobName string) error {
-	// First expand the dropdown
-	clickCode := `(function(){
-		var el = document.querySelector('.chat-select-job, .ui-dropmenu-label, [class*="job-select"]');
+	return browser.Retry(func() error {
+		return switchJobOnce(client, jobName)
+	}, 3, 1*time.Second)
+}
+
+func switchJobOnce(client *browser.Client, jobName string) error {
+	// Ensure dropdown is open
+	clickCode := fmt.Sprintf(`(function(){
+		var el = %s;
 		if (el) { el.click(); return JSON.stringify({clicked:true}); }
 		return JSON.stringify({clicked:false});
-	})()`
+	})()`, jobDropdownSelector())
 
 	raw, err := client.EvaluateValue(clickCode)
 	if err != nil {
@@ -89,12 +108,14 @@ func SwitchJob(client *browser.Client, jobName string) error {
 	}
 	json.Unmarshal(raw, &clickResult)
 	if clickResult.Clicked {
-		time.Sleep(800 * time.Millisecond)
+		if err := client.WaitFor(fmt.Sprintf(`%s.length > 0`, jobItemSelector()), 3*time.Second, 200*time.Millisecond); err != nil {
+			return fmt.Errorf("dropdown did not open: %w", err)
+		}
 	}
 
 	// Find and click the job item
 	code := fmt.Sprintf(`(function(){
-		var items = document.querySelectorAll('.ui-dropmenu-item, .dropdown-item, [class*="dropmenu"] li, [class*="dropdown"] li, .select-job-list li');
+		var items = %s;
 		for (var i = 0; i < items.length; i++) {
 			var t = items[i].textContent.trim();
 			if (t.indexOf('%s') > -1) {
@@ -103,7 +124,7 @@ func SwitchJob(client *browser.Client, jobName string) error {
 			}
 		}
 		return JSON.stringify({success: false, reason: 'job not found'});
-	})()`, strings.ReplaceAll(jobName, "'", "\\'"))
+	})()`, jobItemSelector(), strings.ReplaceAll(jobName, "'", "\\'"))
 
 	raw, err = client.EvaluateValue(code)
 	if err != nil {
@@ -119,6 +140,16 @@ func SwitchJob(client *browser.Client, jobName string) error {
 	}
 	if !result.Success {
 		return fmt.Errorf("switch job failed: %s", result.Reason)
+	}
+
+	// Wait for the dropdown to close and the selected job to appear in the UI
+	if err := client.WaitForText(jobDropdownSelector(), jobName, 5*time.Second); err != nil {
+		return fmt.Errorf("job label did not update to %q: %w", jobName, err)
+	}
+
+	// Wait for candidate list to load for the new job
+	if err := client.WaitForSelector(".geek-item-wrap", 5*time.Second); err != nil {
+		return fmt.Errorf("candidate list did not load after switching job: %w", err)
 	}
 	return nil
 }
@@ -139,7 +170,6 @@ func isUserMenuItem(text string) bool {
 }
 
 func parseJobText(text string) Job {
-	// Format: "职位名 _ 地点 薪资" or "职位名（关闭） _ 地点 薪资"
 	closed := strings.Contains(text, "（关闭）") || strings.Contains(text, "(关闭)")
 	name := text
 	var location, salary string
@@ -148,7 +178,6 @@ func parseJobText(text string) Job {
 	if len(parts) >= 2 {
 		name = strings.TrimSpace(parts[0])
 		rest := strings.TrimSpace(parts[1])
-		// rest might be "北京 20-40K" or "北京 400-500元/天"
 		spaceIdx := strings.LastIndex(rest, " ")
 		if spaceIdx > 0 {
 			location = strings.TrimSpace(rest[:spaceIdx])

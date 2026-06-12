@@ -80,8 +80,29 @@ BOSS-cli --help
 
 ### Switch job, filter, and unread state
 
+`switch-job` is a **three-dimensional state switch**: job (岗位) × communication status (沟通状态) × message status (消息状态: 全部/未读). It switches each dimension and verifies the result before returning.
+
 ```bash
+# Job + communication filter + unread
 ./BOSS-cli switch-job "商业分析实习生" --filter="新招呼" --unread
+
+# Job + communication filter only
+./BOSS-cli switch-job "海外社媒增长运营实习生" --filter="沟通中"
+
+# Job only
+./BOSS-cli switch-job "海外社媒增长运营实习生"
+```
+
+| Dimension | Options |
+|---|---|
+| Job (岗位) | Any job name from `list-jobs` |
+| Communication status (沟通状态) | `全部` / `新招呼` / `沟通中` / `已约面` / `已获取简历` / `已交换电话` / `已交换微信` / `收藏` / `更多` |
+| Message status (消息状态) | `全部` (default) / `未读` (`--unread`) |
+
+Each dimension is retried independently if the target state is not reached. Use `--debug` to print a page snapshot on failure:
+
+```bash
+./BOSS-cli switch-job "商业分析实习生" --filter="新招呼" --unread --debug
 ```
 
 ### List candidates

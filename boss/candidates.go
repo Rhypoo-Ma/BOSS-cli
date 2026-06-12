@@ -17,7 +17,7 @@ type Candidate struct {
 
 func ListCandidates(client *browser.Client, filterStatus string) ([]Candidate, error) {
 	// If filterStatus provided, click the corresponding tab first
-	if filterStatus != "" {
+	if filterStatus != "" && filterStatus != "全部" {
 		if err := clickFilterTab(client, filterStatus); err != nil {
 			return nil, err
 		}
@@ -47,29 +47,6 @@ func ListCandidates(client *browser.Client, filterStatus string) ([]Candidate, e
 	return candidates, nil
 }
 
-func clickFilterTab(client *browser.Client, status string) error {
-	code := fmt.Sprintf(`(function(){
-		var els = document.querySelectorAll('div, span, a, li');
-		for (var i = 0; i < els.length; i++) {
-			var t = els[i].textContent.trim();
-			if (t.indexOf('%s') > -1 && t.length < 20) {
-				els[i].click();
-				return JSON.stringify({success: true});
-			}
-		}
-		return JSON.stringify({success: false});
-	})()`, strings.ReplaceAll(status, "'", "\\'"))
-
-	raw, err := client.EvaluateValue(code)
-	if err != nil {
-		return fmt.Errorf("evaluate failed: %w", err)
-	}
-	var result struct {
-		Success bool `json:"success"`
-	}
-	json.Unmarshal(raw, &result)
-	return nil
-}
 
 func parseCandidates(items [][]string) []Candidate {
 	var candidates []Candidate
