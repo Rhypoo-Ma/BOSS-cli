@@ -75,16 +75,41 @@ func OpenOnlineResume(client *browser.Client, name string) error {
 	return nil
 }
 
-// CloseOnlineResume closes the online resume dialog if present.
+// CloseOnlineResume closes the currently active online resume dialog.
 func CloseOnlineResume(client *browser.Client) error {
 	code := `(function(){
-		var dialog = document.querySelector('.resume-common-dialog, .resume-container, .boss-dialog__wrapper');
-		if (!dialog) return JSON.stringify({closed: false, reason: 'no dialog found'});
-		var closeBtn = dialog.querySelector('.boss-dialog__close, .boss-popup__close, .icon-close, [class*="close"]');
-		if (closeBtn) { closeBtn.click(); return JSON.stringify({closed: true}); }
-		// Fallback: press Escape key
-		document.dispatchEvent(new KeyboardEvent('keydown', {key: 'Escape', bubbles: true}));
-		return JSON.stringify({closed: true, method: 'escape'});
+		return new Promise(function(resolve){
+			var wrap = document.querySelector('.dialog-wrap.active');
+			if (!wrap) {
+				var dialogs = document.querySelectorAll('.resume-container, .resume-common-dialog');
+				if (!dialogs.length) {
+					resolve(JSON.stringify({closed: false, reason: 'no dialog found'}));
+					return;
+				}
+				wrap = dialogs[dialogs.length - 1].parentElement;
+			}
+			var dialog = wrap.querySelector('.resume-common-dialog, .resume-container, .boss-dialog__wrapper');
+			if (!dialog) {
+				resolve(JSON.stringify({closed: false, reason: 'no dialog found'}));
+				return;
+			}
+
+			var closeBtn = dialog.querySelector('.close-btn');
+			if (closeBtn) {
+				HTMLElement.prototype.click.call(closeBtn);
+			}
+
+			setTimeout(function(){
+				var w = document.querySelector('.dialog-wrap.active');
+				if (w) {
+					w.classList.remove('active');
+					w.classList.add('deactive');
+					var d = w.querySelector('.resume-common-dialog, .boss-dialog__wrapper');
+					if (d) d.style.display = 'none';
+				}
+				resolve(JSON.stringify({closed: true}));
+			}, 300);
+		});
 	})()`
 
 	raw, err := client.EvaluateValue(code)
