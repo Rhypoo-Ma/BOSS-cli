@@ -244,6 +244,7 @@ func init() {
 			max, _ := cmd.Flags().GetInt("max")
 			minGrade, _ := cmd.Flags().GetInt("min-grade")
 			names, _ := cmd.Flags().GetString("names")
+			schoolTier, _ := cmd.Flags().GetString("school-tier")
 			schools, _ := cmd.Flags().GetString("schools")
 			if keyword == "" {
 				handleError("missing_keyword", "Please provide --keyword", nil)
@@ -255,7 +256,7 @@ func init() {
 			if _, err := boss.CheckLogin(client); err != nil {
 				handleError("not_logged_in", "Please run login-status first and ensure you are logged in.", client)
 			}
-			results, err := boss.ScanResumes(client, args[0], filter, unread, parseKeywords(keyword), message, useOCR, excludeJobTitle, max, minGrade, parseKeywords(names), parseKeywords(schools))
+			results, err := boss.ScanResumes(client, args[0], filter, unread, parseKeywords(keyword), message, useOCR, excludeJobTitle, max, minGrade, parseKeywords(names), schoolTier, parseKeywords(schools))
 			if err != nil {
 				handleError("scan_failed", err.Error(), client)
 			}
@@ -271,7 +272,8 @@ func init() {
 	scanResumesCmd.Flags().Int("max", 50, "Maximum candidates to scan (0 = no limit)")
 	scanResumesCmd.Flags().Int("min-grade", 0, "Minimum graduation year (e.g. 2027). 0 means no filter.")
 	scanResumesCmd.Flags().String("names", "", "Comma-separated candidate names to scan (default: all)")
-	scanResumesCmd.Flags().String("schools", "", "Comma-separated school keywords to filter candidates (e.g. 清华,北大,浙大)")
+	scanResumesCmd.Flags().String("school-tier", "", "School tier preset: c9, 985, or overseas (can combine with --schools)")
+	scanResumesCmd.Flags().String("schools", "", "Extra comma-separated school keywords to filter candidates (e.g. 清华,北大,浙大)")
 	rootCmd.AddCommand(scanResumesCmd)
 
 	// close-resume

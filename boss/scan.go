@@ -24,7 +24,8 @@ type ScanResult struct {
 // ScanResumes switches to the given job/filter, collects candidates, and for each one
 // searches the online resume for keywords.
 //   - If minGrade > 0, the graduation year must be >= minGrade.
-//   - If schools is non-empty, the resume text must contain one of the school keywords.
+//   - If schoolTier is set (c9/985/overseas) or schools is non-empty, the resume text
+//     must contain one of the corresponding school keywords.
 //   - If names is non-empty, only candidates in that set are scanned.
 // When all enabled conditions pass and message is non-empty, it sends the message.
 func ScanResumes(
@@ -37,6 +38,7 @@ func ScanResumes(
 	max int,
 	minGrade int,
 	names []string,
+	schoolTier string,
 	schools []string,
 ) ([]ScanResult, error) {
 	if _, err := SwitchJobWithFilters(client, jobName, filterStatus, unreadOnly); err != nil {
@@ -51,6 +53,12 @@ func ScanResumes(
 	nameSet := map[string]bool{}
 	for _, n := range names {
 		nameSet[strings.TrimSpace(n)] = true
+	}
+
+	// Build the effective school keyword list from tier + custom schools.
+	 effectiveSchools := append([]string{}, schools...)
+	if tierKeywords := SchoolKeywords(schoolTier); tierKeywords != nil {
+		effectiveSchools = append(effectiveSchools, tierKeywords...)
 	}
 
 	var results []ScanResult
@@ -73,8 +81,8 @@ func ScanResumes(
 			if minGrade > 0 {
 				res.GradYear = extractGradYear(text)
 			}
-			if len(schools) > 0 {
-				res.School = extractSchool(text, schools)
+			if len(effectiveSchools) > 0 {
+				res.School = extractSchool(text, effectiveSchools)
 			}
 		}
 
@@ -82,7 +90,7 @@ func ScanResumes(
 		if minGrade > 0 {
 			eligible = eligible && res.GradYear > 0 && res.GradYear >= minGrade
 		}
-		if len(schools) > 0 {
+		if len(effectiveSchools) > 0 {
 			eligible = eligible && res.School != ""
 		}
 
@@ -162,6 +170,20 @@ func extractSchool(text string, schools []string) string {
 		if strings.Contains(lower, strings.ToLower(s)) {
 			return s
 		}
+	}
+	return ""
+}
+
+// extractSchoolTier returns the tier label (c9/985/overseas) matched in the text, if any.
+func extractSchoolTier(text string) string {
+	if school := extractSchool(text, c9Schools); school != "" {
+		return "c9"
+	}
+	if school := extractSchool(text, project985Schools); school != "" {
+		return "985"
+	}
+	if IsOverseasSchool(text) {
+		return "overseas"
 	}
 	return ""
 }
