@@ -63,8 +63,8 @@ func OpenOnlineResume(client *browser.Client, name string) (string, error) {
 		// Non-fatal; continue opening
 	}
 
-	// Step 1: click candidate in the list
-	if err := clickCandidateByName(client, name); err != nil {
+	// Step 1: click candidate in the list (with scrolling for virtual lists)
+	if err := clickCandidateByNameWithScroll(client, name); err != nil {
 		return "", err
 	}
 	time.Sleep(800 * time.Millisecond)
@@ -252,6 +252,39 @@ func clickCandidateByName(client *browser.Client, name string) error {
 		return errors.New(result.Reason)
 	}
 	return nil
+}
+
+// clickCandidateByNameWithScroll scrolls the candidate list until the target is found.
+func clickCandidateByNameWithScroll(client *browser.Client, name string) error {
+	// Start from the top of the list.
+	resetCode := `(function(){
+		var list = document.querySelector('.user-list, .chat-list, [class*="user-list"], [class*="conversation-list"], .geek-list');
+		if (list) list.scrollTop = 0;
+		return JSON.stringify({ok: true});
+	})()`
+	client.EvaluateValue(resetCode)
+	time.Sleep(300 * time.Millisecond)
+
+	return browser.Retry(func() error {
+		if err := clickCandidateByName(client, name); err == nil {
+			return nil
+		}
+		scrollCode := `(function(){
+			var list = document.querySelector('.user-list, .chat-list, [class*="user-list"], [class*="conversation-list"], .geek-list');
+			if (!list) return JSON.stringify({error: 'no list'});
+			list.scrollTop += 400;
+			return JSON.stringify({atBottom: list.scrollTop >= list.scrollHeight - list.clientHeight - 5});
+		})()`
+		raw, _ := client.EvaluateValue(scrollCode)
+		var r struct {
+			AtBottom bool `json:"atBottom"`
+		}
+		json.Unmarshal(raw, &r)
+		if r.AtBottom {
+			return fmt.Errorf("candidate not found after scrolling to bottom")
+		}
+		return fmt.Errorf("candidate not visible yet")
+	}, 50, 400*time.Millisecond)
 }
 
 func buildResumePreview(basic, times, details []string, expectation, jobTitle, rawText string) *ResumePreview {

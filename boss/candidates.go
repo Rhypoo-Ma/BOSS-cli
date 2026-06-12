@@ -172,11 +172,11 @@ func scrollList(client *browser.Client, step int) (bool, error) {
 		return false, fmt.Errorf("scroll failed: %w", err)
 	}
 	var r struct {
-		BeforeTop int    `json:"beforeTop"`
-		AfterTop  int    `json:"afterTop"`
-		MaxScroll int    `json:"maxScroll"`
-		AtBottom  bool   `json:"atBottom"`
-		Error     string `json:"error,omitempty"`
+		BeforeTop float64 `json:"beforeTop"`
+		AfterTop  float64 `json:"afterTop"`
+		MaxScroll float64 `json:"maxScroll"`
+		AtBottom  bool    `json:"atBottom"`
+		Error     string  `json:"error,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return false, fmt.Errorf("parse scroll result failed: %w", err)

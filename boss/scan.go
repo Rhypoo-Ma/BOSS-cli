@@ -2,6 +2,8 @@ package boss
 
 import (
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Rhypoo-Ma/BOSS-cli/browser"
@@ -13,13 +15,18 @@ type ScanResult struct {
 	Matched   bool      `json:"matched"`
 	Keyword   string    `json:"keyword,omitempty"`
 	Matches   int       `json:"matches"`
+	GradYear  int       `json:"grad_year,omitempty"`
+	School    string    `json:"school,omitempty"`
 	Sent      bool      `json:"sent"`
 	Error     string    `json:"error,omitempty"`
 }
 
 // ScanResumes switches to the given job/filter, collects candidates, and for each one
-// searches the online resume for keywords. If a keyword matches and message is non-empty,
-// it sends the message to the candidate.
+// searches the online resume for keywords.
+//   - If minGrade > 0, the graduation year must be >= minGrade.
+//   - If schools is non-empty, the resume text must contain one of the school keywords.
+//   - If names is non-empty, only candidates in that set are scanned.
+// When all enabled conditions pass and message is non-empty, it sends the message.
 func ScanResumes(
 	client *browser.Client,
 	jobName, filterStatus string,
@@ -28,6 +35,9 @@ func ScanResumes(
 	message string,
 	useOCR, excludeJobTitle bool,
 	max int,
+	minGrade int,
+	names []string,
+	schools []string,
 ) ([]ScanResult, error) {
 	if _, err := SwitchJobWithFilters(client, jobName, filterStatus, unreadOnly); err != nil {
 		return nil, fmt.Errorf("switch job failed: %w", err)
@@ -38,10 +48,18 @@ func ScanResumes(
 		return nil, fmt.Errorf("list candidates failed: %w", err)
 	}
 
+	nameSet := map[string]bool{}
+	for _, n := range names {
+		nameSet[strings.TrimSpace(n)] = true
+	}
+
 	var results []ScanResult
 	for _, cand := range candidates {
+		if len(nameSet) > 0 && !nameSet[cand.Name] {
+			continue
+		}
 		res := ScanResult{Candidate: cand}
-		matched, keyword, matchCount, scanErr := scanOne(client, cand.Name, keywords, useOCR, excludeJobTitle)
+		matched, keyword, matchCount, text, scanErr := scanOneWithText(client, cand.Name, keywords, useOCR, excludeJobTitle)
 		if scanErr != nil {
 			res.Error = scanErr.Error()
 			results = append(results, res)
@@ -51,7 +69,24 @@ func ScanResumes(
 		res.Keyword = keyword
 		res.Matches = matchCount
 
-		if matched && strings.TrimSpace(message) != "" {
+		if text != "" {
+			if minGrade > 0 {
+				res.GradYear = extractGradYear(text)
+			}
+			if len(schools) > 0 {
+				res.School = extractSchool(text, schools)
+			}
+		}
+
+		eligible := matched
+		if minGrade > 0 {
+			eligible = eligible && res.GradYear > 0 && res.GradYear >= minGrade
+		}
+		if len(schools) > 0 {
+			eligible = eligible && res.School != ""
+		}
+
+		if eligible && strings.TrimSpace(message) != "" {
 			if err := SendMessage(client, cand.Name, message); err != nil {
 				res.Error = fmt.Sprintf("send message failed: %v", err)
 			} else {
@@ -63,23 +98,70 @@ func ScanResumes(
 	return results, nil
 }
 
-func scanOne(client *browser.Client, name string, keywords []string, useOCR, excludeJobTitle bool) (bool, string, int, error) {
+func scanOneWithText(client *browser.Client, name string, keywords []string, useOCR, excludeJobTitle bool) (bool, string, int, string, error) {
 	if useOCR {
 		result, err := SearchResumeWithOCR(client, name, keywords, excludeJobTitle)
 		if err != nil {
-			return false, "", 0, err
+			return false, "", 0, "", err
 		}
-		return result.Matched, result.Keyword, result.Count, nil
+		return result.Matched, result.Keyword, result.Count, result.Text, nil
 	}
 
 	if _, err := OpenOnlineResume(client, name); err != nil {
-		return false, "", 0, err
+		return false, "", 0, "", err
 	}
 	preview, err := ExtractResumePreview(client)
 	_ = CloseOnlineResume(client)
 	if err != nil {
-		return false, "", 0, err
+		return false, "", 0, "", err
 	}
 	result := SearchResume(preview, keywords, excludeJobTitle)
-	return result.Matched, result.Keyword, result.Count, nil
+	return result.Matched, result.Keyword, result.Count, preview.RawText, nil
+}
+
+var gradYearPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`20(\d{2})届`),
+	regexp.MustCompile(`(\d{2})届`),
+	regexp.MustCompile(`20(\d{2})年毕业`),
+	regexp.MustCompile(`(\d{2})年毕业`),
+	regexp.MustCompile(`20(\d{2})年应届`),
+	regexp.MustCompile(`(\d{2})年应届`),
+	regexp.MustCompile(`20(\d{2})届应届`),
+	regexp.MustCompile(`(\d{2})届应届`),
+	regexp.MustCompile(`预计20(\d{2})`),
+	regexp.MustCompile(`(\d{4})年毕业`),
+}
+
+// extractGradYear parses common graduation year expressions from resume text.
+// It returns 0 if no year is found.
+func extractGradYear(text string) int {
+	lower := strings.ToLower(text)
+	for _, re := range gradYearPatterns {
+		matches := re.FindStringSubmatch(lower)
+		if len(matches) < 2 {
+			continue
+		}
+		year, err := strconv.Atoi(matches[1])
+		if err != nil {
+			continue
+		}
+		if year < 100 {
+			year += 2000
+		}
+		if year >= 2020 && year <= 2035 {
+			return year
+		}
+	}
+	return 0
+}
+
+// extractSchool returns the first school keyword found in the resume text.
+func extractSchool(text string, schools []string) string {
+	lower := strings.ToLower(text)
+	for _, s := range schools {
+		if strings.Contains(lower, strings.ToLower(s)) {
+			return s
+		}
+	}
+	return ""
 }

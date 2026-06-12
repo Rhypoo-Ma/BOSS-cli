@@ -89,6 +89,7 @@ func SearchResumeWithOCR(client *browser.Client, name string, keywords []string,
 		_ = CloseOnlineResume(client)
 		return nil, fmt.Errorf("ocr failed: %w", err)
 	}
+	text = cleanOCRText(text)
 
 	// Supplement with the structured panel text in case OCR missed key fields.
 	if preview, err := ExtractResumePreview(client); err == nil && preview.RawText != "" {
@@ -244,6 +245,17 @@ func runOCR(imagePath string) (string, error) {
 		return "", fmt.Errorf("ocr script failed: %w", err)
 	}
 	return string(out), nil
+}
+
+func cleanOCRText(text string) string {
+	// Vision OCR sometimes drops the leading "A" from "Agent".
+	text = strings.ReplaceAll(text, "gent/", "agent/")
+	text = strings.ReplaceAll(text, "Gent/", "Agent/")
+	text = strings.ReplaceAll(text, "gent ", "agent ")
+	text = strings.ReplaceAll(text, "Gent ", "Agent ")
+	text = strings.ReplaceAll(text, "gent\n", "agent\n")
+	text = strings.ReplaceAll(text, "Gent\n", "Agent\n")
+	return text
 }
 
 func cropPNG(inputPath, outputPath string, rect image.Rectangle) error {
