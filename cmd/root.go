@@ -229,6 +229,45 @@ func init() {
 	viewResumeCmd.Flags().Bool("exclude-job-title", false, "Ignore matches that only come from the job title 'AI达人营销'")
 	rootCmd.AddCommand(viewResumeCmd)
 
+	// scan-resumes
+	scanResumesCmd := &cobra.Command{
+		Use:   "scan-resumes [job-name]",
+		Short: "Scan candidates in a job/filter and send message if keyword matches",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			filter, _ := cmd.Flags().GetString("filter")
+			unread, _ := cmd.Flags().GetBool("unread")
+			keyword, _ := cmd.Flags().GetString("keyword")
+			message, _ := cmd.Flags().GetString("message")
+			useOCR, _ := cmd.Flags().GetBool("ocr")
+			excludeJobTitle, _ := cmd.Flags().GetBool("exclude-job-title")
+			max, _ := cmd.Flags().GetInt("max")
+			if keyword == "" {
+				handleError("missing_keyword", "Please provide --keyword", nil)
+			}
+			if message == "" {
+				handleError("missing_message", "Please provide --message", nil)
+			}
+			client := newClient()
+			if _, err := boss.CheckLogin(client); err != nil {
+				handleError("not_logged_in", "Please run login-status first and ensure you are logged in.", client)
+			}
+			results, err := boss.ScanResumes(client, args[0], filter, unread, parseKeywords(keyword), message, useOCR, excludeJobTitle, max)
+			if err != nil {
+				handleError("scan_failed", err.Error(), client)
+			}
+			output.Success(results)
+		},
+	}
+	scanResumesCmd.Flags().String("filter", "", "Communication status filter (e.g. 新招呼)")
+	scanResumesCmd.Flags().Bool("unread", false, "Only scan unread candidates")
+	scanResumesCmd.Flags().String("keyword", "", "Comma-separated keywords to search in resumes")
+	scanResumesCmd.Flags().String("message", "", "Message to send when a keyword matches")
+	scanResumesCmd.Flags().Bool("ocr", false, "Use OCR on the online resume screenshot for keyword search (macOS only)")
+	scanResumesCmd.Flags().Bool("exclude-job-title", false, "Ignore matches that only come from the job title")
+	scanResumesCmd.Flags().Int("max", 50, "Maximum candidates to scan (0 = no limit)")
+	rootCmd.AddCommand(scanResumesCmd)
+
 	// close-resume
 	closeResumeCmd := &cobra.Command{
 		Use:   "close-resume",
