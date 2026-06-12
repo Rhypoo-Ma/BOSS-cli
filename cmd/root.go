@@ -167,4 +167,66 @@ func init() {
 	}
 	downloadResumeCmd.Flags().String("dir", "", "Download directory (optional, browser default used)")
 	rootCmd.AddCommand(downloadResumeCmd)
+
+	// view-resume
+	viewResumeCmd := &cobra.Command{
+		Use:   "view-resume [candidate-name]",
+		Short: "Open a candidate's online resume and extract preview info",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			keepOpen, _ := cmd.Flags().GetBool("keep-open")
+			client := newClient()
+			_, err := boss.CheckLogin(client)
+			if err != nil {
+				handleError("not_logged_in", "Please run login-status first and ensure you are logged in.", client)
+			}
+			if err := boss.OpenOnlineResume(client, args[0]); err != nil {
+				handleError("open_resume_failed", err.Error(), client)
+			}
+			preview, err := boss.ExtractResumePreview(client)
+			if err != nil {
+				handleError("extract_resume_failed", err.Error(), client)
+			}
+			if !keepOpen {
+				_ = boss.CloseOnlineResume(client)
+			}
+			output.Success(preview)
+		},
+	}
+	viewResumeCmd.Flags().Bool("keep-open", false, "Keep the resume dialog open after extraction")
+	rootCmd.AddCommand(viewResumeCmd)
+
+	// close-resume
+	closeResumeCmd := &cobra.Command{
+		Use:   "close-resume",
+		Short: "Close the online resume dialog",
+		Run: func(cmd *cobra.Command, args []string) {
+			client := newClient()
+			if err := boss.CloseOnlineResume(client); err != nil {
+				handleError("close_resume_failed", err.Error(), client)
+			}
+			output.Success(map[string]string{"closed": "true"})
+		},
+	}
+	rootCmd.AddCommand(closeResumeCmd)
+
+	// scroll-resume
+	scrollResumeCmd := &cobra.Command{
+		Use:   "scroll-resume [pixels]",
+		Short: "Scroll the online resume dialog down by the given pixels",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			pixels := 0
+			fmt.Sscanf(args[0], "%d", &pixels)
+			if pixels <= 0 {
+				pixels = 500
+			}
+			client := newClient()
+			if err := boss.ScrollOnlineResume(client, pixels); err != nil {
+				handleError("scroll_resume_failed", err.Error(), client)
+			}
+			output.Success(map[string]int{"scrolled": pixels})
+		},
+	}
+	rootCmd.AddCommand(scrollResumeCmd)
 }

@@ -124,6 +124,24 @@ Each dimension is retried independently if the target state is not reached. Use 
 ./BOSS-cli download-resume "候选人姓名" --dir="./resumes"
 ```
 
+### View online resume
+
+Open a candidate's online resume dialog, extract the visible preview info, and close it automatically:
+
+```bash
+./BOSS-cli view-resume "候选人姓名"
+```
+
+Keep the resume dialog open so you can scroll through it in the browser:
+
+```bash
+./BOSS-cli view-resume "候选人姓名" --keep-open
+./BOSS-cli scroll-resume 800
+./BOSS-cli close-resume
+```
+
+The extracted preview includes name, age, work years, education, work experience, and education history.
+
 ### Show version
 
 ```bash
@@ -180,7 +198,8 @@ BOSS-cli/
 │   ├── filters.go
 │   ├── candidates.go
 │   ├── message.go
-│   └── resume.go
+│   ├── resume.go
+│   └── online_resume.go
 ├── browser/              # HTTP client for kimi-webbridge daemon
 │   └── client.go
 ├── output/               # JSON output helpers
