@@ -129,9 +129,9 @@ func clickFilterTabOnce(client *browser.Client, status string) error {
 	return nil
 }
 
-// unreadFilterSelector returns a JavaScript expression that matches the unread filter element.
+// unreadFilterSelector returns a JavaScript expression that matches the unread filter container.
 func unreadFilterSelector() string {
-	return `document.querySelector('.chat-message-filter-left span, .chat-message-filter-left div, [class*="filter-left"] span, [class*="unread"]')`
+	return `document.querySelector('.chat-message-filter-left, [class*="filter-left"]')`
 }
 
 func clickUnreadFilter(client *browser.Client) error {
@@ -194,8 +194,8 @@ func verifyFilters(client *browser.Client, expectedJob, expectedFilter string, e
 	code := `(function(){
 		var result = {job: '', filter: '', unread: false, confirmed: false};
 		
-		// Check job label
-		var jobEl = document.querySelector('.chat-select-job, .ui-dropmenu-label, [class*="job-select"], [class*="select-job"]');
+		// Check job label (scoped inside .chat-top-job to avoid matching user menu)
+		var jobEl = document.querySelector('.chat-top-job .chat-select-job');
 		if (jobEl) result.job = jobEl.innerText.trim();
 		
 		// Check active communication status tab

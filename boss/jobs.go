@@ -16,42 +16,35 @@ type Job struct {
 	Closed   bool   `json:"closed,omitempty"`
 }
 
-// jobDropdownSelector returns a JavaScript expression that tries multiple selectors.
-func jobDropdownSelector() string {
-	return `document.querySelector('.chat-select-job, .ui-dropmenu-label, [class*="job-select"], [class*="select-job"], .job-dropdown')`
+// jobDropdownTrigger returns the CSS selector for the job dropdown trigger.
+func jobDropdownTrigger() string {
+	return ".chat-top-job, .chat-select-job"
 }
 
-// jobItemSelector returns a JavaScript expression that matches job items in the dropdown.
+// jobDropdownLabel returns the CSS selector for the current job label text.
+// Scoped inside .chat-top-job to avoid matching the user profile menu.
+func jobDropdownLabel() string {
+	return ".chat-top-job .chat-select-job"
+}
+
+// jobItemSelector returns the CSS selector for job items inside the dropdown.
 func jobItemSelector() string {
-	return `document.querySelectorAll('.ui-dropmenu-item, .dropdown-item, [class*="dropmenu"] li, [class*="dropdown"] li, .select-job-list li, [class*="job-select"] li, [class*="job-dropdown"] li')`
+	return ".ui-dropmenu-item, .dropdown-item, [class*=\"dropmenu\"] li, [class*=\"dropdown\"] li, .select-job-list li, [class*=\"job-select\"] li, [class*=\"job-dropdown\"] li"
 }
 
 func ListJobs(client *browser.Client) ([]Job, error) {
-	// Click the job dropdown to expand it
-	clickCode := fmt.Sprintf(`(function(){
-		var el = %s;
-		if (el) { el.click(); return JSON.stringify({clicked:true}); }
-		return JSON.stringify({clicked:false});
-	})()`, jobDropdownSelector())
+	if err := ensureDropdownOpen(client); err != nil {
+		return nil, err
+	}
 
-	raw, err := client.EvaluateValue(clickCode)
-	if err != nil {
-		return nil, fmt.Errorf("click dropdown failed: %w", err)
-	}
-	var clickResult struct {
-		Clicked bool `json:"clicked"`
-	}
-	json.Unmarshal(raw, &clickResult)
-	if clickResult.Clicked {
-		// Wait for dropdown items to render
-		if err := client.WaitFor(fmt.Sprintf(`%s.length > 0`, jobItemSelector()), 5*time.Second, 200*time.Millisecond); err != nil {
-			return nil, fmt.Errorf("dropdown did not open: %w", err)
-		}
+	// Wait for dropdown items to render
+	if err := client.WaitFor(fmt.Sprintf(`document.querySelectorAll('%s').length > 0`, jobItemSelector()), 5*time.Second, 200*time.Millisecond); err != nil {
+		return nil, fmt.Errorf("dropdown did not open: %w", err)
 	}
 
 	// Extract job list items
 	listCode := fmt.Sprintf(`(function(){
-		var items = %s;
+		var items = document.querySelectorAll('%s');
 		var jobs = [];
 		for (var i = 0; i < items.length; i++) {
 			var t = items[i].textContent.trim();
@@ -62,7 +55,7 @@ func ListJobs(client *browser.Client) ([]Job, error) {
 		return JSON.stringify(jobs);
 	})()`, jobItemSelector())
 
-	raw, err = client.EvaluateValue(listCode)
+	raw, err := client.EvaluateValue(listCode)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate failed: %w", err)
 	}
@@ -92,30 +85,19 @@ func SwitchJob(client *browser.Client, jobName string) error {
 }
 
 func switchJobOnce(client *browser.Client, jobName string) error {
-	// Ensure dropdown is open
-	clickCode := fmt.Sprintf(`(function(){
-		var el = %s;
-		if (el) { el.click(); return JSON.stringify({clicked:true}); }
-		return JSON.stringify({clicked:false});
-	})()`, jobDropdownSelector())
-
-	raw, err := client.EvaluateValue(clickCode)
-	if err != nil {
-		return fmt.Errorf("click dropdown failed: %w", err)
-	}
-	var clickResult struct {
-		Clicked bool `json:"clicked"`
-	}
-	json.Unmarshal(raw, &clickResult)
-	if clickResult.Clicked {
-		if err := client.WaitFor(fmt.Sprintf(`%s.length > 0`, jobItemSelector()), 3*time.Second, 200*time.Millisecond); err != nil {
-			return fmt.Errorf("dropdown did not open: %w", err)
-		}
+	// Fast path: already on target job
+	if isCurrentJob(client, jobName) {
+		return nil
 	}
 
-	// Find and click the job item
+	// Make sure dropdown is open; close and reopen if needed
+	if err := ensureDropdownOpen(client); err != nil {
+		return fmt.Errorf("open dropdown failed: %w", err)
+	}
+
+	// Find and click the target job item
 	code := fmt.Sprintf(`(function(){
-		var items = %s;
+		var items = document.querySelectorAll('%s');
 		for (var i = 0; i < items.length; i++) {
 			var t = items[i].textContent.trim();
 			if (t.indexOf('%s') > -1) {
@@ -126,7 +108,7 @@ func switchJobOnce(client *browser.Client, jobName string) error {
 		return JSON.stringify({success: false, reason: 'job not found'});
 	})()`, jobItemSelector(), strings.ReplaceAll(jobName, "'", "\\'"))
 
-	raw, err = client.EvaluateValue(code)
+	raw, err := client.EvaluateValue(code)
 	if err != nil {
 		return fmt.Errorf("evaluate failed: %w", err)
 	}
@@ -142,8 +124,8 @@ func switchJobOnce(client *browser.Client, jobName string) error {
 		return fmt.Errorf("switch job failed: %s", result.Reason)
 	}
 
-	// Wait for the dropdown to close and the selected job to appear in the UI
-	if err := client.WaitForText(jobDropdownSelector(), jobName, 5*time.Second); err != nil {
+	// Wait for the dropdown to close and the selected job label to update
+	if err := client.WaitForText(jobDropdownLabel(), jobName, 5*time.Second); err != nil {
 		return fmt.Errorf("job label did not update to %q: %w", jobName, err)
 	}
 
@@ -152,6 +134,72 @@ func switchJobOnce(client *browser.Client, jobName string) error {
 		return fmt.Errorf("candidate list did not load after switching job: %w", err)
 	}
 	return nil
+}
+
+func isCurrentJob(client *browser.Client, jobName string) bool {
+	code := fmt.Sprintf(`(function(){
+		var el = document.querySelector('%s');
+		return JSON.stringify({current: el ? el.textContent.trim() : ''});
+	})()`, jobDropdownLabel())
+	raw, err := client.EvaluateValue(code)
+	if err != nil {
+		return false
+	}
+	var r struct {
+		Current string `json:"current"`
+	}
+	json.Unmarshal(raw, &r)
+	return strings.Contains(r.Current, jobName)
+}
+
+func ensureDropdownOpen(client *browser.Client) error {
+	// Check if any job dropdown is already open
+	checkCode := `(function(){
+		var open = document.querySelector('.chat-top-job .ui-dropmenu-list, .chat-top-job [class*="dropmenu-list"], .chat-top-job.active');
+		return JSON.stringify({open: !!open});
+	})()`
+	raw, err := client.EvaluateValue(checkCode)
+	if err != nil {
+		return fmt.Errorf("check dropdown failed: %w", err)
+	}
+	var check struct {
+		Open bool `json:"open"`
+	}
+	json.Unmarshal(raw, &check)
+
+	// If already open, click trigger again to close it, then reopen
+	if check.Open {
+		closeCode := fmt.Sprintf(`(function(){
+			var el = document.querySelector('%s');
+			if (el) { el.click(); }
+			return JSON.stringify({clicked: true});
+		})()`, jobDropdownTrigger())
+		client.EvaluateValue(closeCode)
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	// Click to open
+	openCode := fmt.Sprintf(`(function(){
+		var el = document.querySelector('%s');
+		if (!el) return JSON.stringify({clicked: false});
+		el.click();
+		return JSON.stringify({clicked: true});
+	})()`, jobDropdownTrigger())
+
+	raw, err = client.EvaluateValue(openCode)
+	if err != nil {
+		return fmt.Errorf("click dropdown failed: %w", err)
+	}
+	var result struct {
+		Clicked bool `json:"clicked"`
+	}
+	json.Unmarshal(raw, &result)
+	if !result.Clicked {
+		return fmt.Errorf("job dropdown trigger not found")
+	}
+
+	// Wait for dropdown items to render
+	return client.WaitFor(fmt.Sprintf(`document.querySelectorAll('%s').length > 0`, jobItemSelector()), 3*time.Second, 200*time.Millisecond)
 }
 
 func isUserMenuItem(text string) bool {
