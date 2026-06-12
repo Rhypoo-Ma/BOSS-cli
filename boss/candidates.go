@@ -1,21 +1,36 @@
 package boss
 
 import (
-	"github.com/Rhypoo-Ma/BOSS-cli/browser"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+
+	"github.com/Rhypoo-Ma/BOSS-cli/browser"
 )
 
 type Candidate struct {
-	Name     string `json:"name"`
-	Job      string `json:"job,omitempty"`
-	Status   string `json:"status,omitempty"`
-	LastMsg  string `json:"last_msg,omitempty"`
-	Time     string `json:"time,omitempty"`
+	Name    string `json:"name"`
+	Job     string `json:"job,omitempty"`
+	Status  string `json:"status,omitempty"`
+	LastMsg string `json:"last_msg,omitempty"`
+	Time    string `json:"time,omitempty"`
 }
 
-func ListCandidates(client *browser.Client, filterStatus string) ([]Candidate, error) {
+type candidateKey struct {
+	Name    string
+	Time    string
+	LastMsg string
+}
+
+func (c Candidate) key() candidateKey {
+	return candidateKey{Name: c.Name, Time: c.Time, LastMsg: c.LastMsg}
+}
+
+// ListCandidates returns candidates from the current job/filter view.
+// If all=true, it scrolls through the virtual list to collect more candidates.
+// max limits the total number when all=true (0 means no limit).
+func ListCandidates(client *browser.Client, filterStatus string, all bool, max int) ([]Candidate, error) {
 	// If filterStatus provided, click the corresponding tab first
 	if filterStatus != "" && filterStatus != "全部" {
 		if err := clickFilterTab(client, filterStatus); err != nil {
@@ -23,6 +38,13 @@ func ListCandidates(client *browser.Client, filterStatus string) ([]Candidate, e
 		}
 	}
 
+	if all {
+		return listAllCandidates(client, max)
+	}
+	return listVisibleCandidates(client)
+}
+
+func listVisibleCandidates(client *browser.Client) ([]Candidate, error) {
 	code := `(function(){
 		var items = document.querySelectorAll('.geek-item-wrap');
 		var result = [];
@@ -43,13 +65,129 @@ func ListCandidates(client *browser.Client, filterStatus string) ([]Candidate, e
 		return nil, fmt.Errorf("parse failed: %w", err)
 	}
 
-	candidates := parseCandidates(items)
-	return candidates, nil
+	return parseCandidates(items), nil
 }
 
+func listAllCandidates(client *browser.Client, max int) ([]Candidate, error) {
+	seen := make(map[candidateKey]bool)
+	result := make([]Candidate, 0)
+
+	scrollStep := 600
+	maxIterations := 100
+	stuckCount := 0
+	const maxStuck = 10
+
+	for iteration := 0; iteration < maxIterations; iteration++ {
+		// Collect currently visible candidates
+		visible, err := listVisibleCandidates(client)
+		if err != nil {
+			return nil, err
+		}
+		newCount := 0
+		for _, c := range visible {
+			if c.Name == "" {
+				continue
+			}
+			k := c.key()
+			if seen[k] {
+				continue
+			}
+			seen[k] = true
+			result = append(result, c)
+			newCount++
+		}
+
+		// Check max limit
+		if max > 0 && len(result) >= max {
+			if len(result) > max {
+				result = result[:max]
+			}
+			return result, nil
+		}
+
+		// Scroll the list
+		atBottom, err := scrollList(client, scrollStep)
+		if err != nil {
+			return result, err
+		}
+		if atBottom {
+			// One final collection after reaching bottom
+			visible, err := listVisibleCandidates(client)
+			if err == nil {
+				for _, c := range visible {
+					if c.Name == "" {
+						continue
+					}
+					k := c.key()
+					if seen[k] {
+						continue
+					}
+					seen[k] = true
+					result = append(result, c)
+				}
+			}
+			if max > 0 && len(result) > max {
+				result = result[:max]
+			}
+			return result, nil
+		}
+
+		// Safety valve: if no new candidates appear for too long, stop
+		if newCount == 0 {
+			stuckCount++
+			if stuckCount >= maxStuck {
+				return result, nil
+			}
+		} else {
+			stuckCount = 0
+		}
+
+		// Wait for virtual list to render new items
+		time.Sleep(300 * time.Millisecond)
+	}
+
+	return result, nil
+}
+
+// scrollList scrolls the candidate list down by step pixels and returns true if the bottom is reached.
+func scrollList(client *browser.Client, step int) (bool, error) {
+	code := fmt.Sprintf(`(function(){
+		var list = document.querySelector('.user-list, .chat-list, [class*="user-list"], [class*="conversation-list"]');
+		if (!list) return JSON.stringify({error: 'list container not found'});
+		var beforeTop = list.scrollTop;
+		list.scrollTop += %d;
+		var afterTop = list.scrollTop;
+		var maxScroll = list.scrollHeight - list.clientHeight;
+		return JSON.stringify({
+			beforeTop: beforeTop,
+			afterTop: afterTop,
+			maxScroll: maxScroll,
+			atBottom: afterTop >= maxScroll - 5
+		});
+	})()`, step)
+
+	raw, err := client.EvaluateValue(code)
+	if err != nil {
+		return false, fmt.Errorf("scroll failed: %w", err)
+	}
+	var r struct {
+		BeforeTop int    `json:"beforeTop"`
+		AfterTop  int    `json:"afterTop"`
+		MaxScroll int    `json:"maxScroll"`
+		AtBottom  bool   `json:"atBottom"`
+		Error     string `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return false, fmt.Errorf("parse scroll result failed: %w", err)
+	}
+	if r.Error != "" {
+		return false, fmt.Errorf(r.Error)
+	}
+	return r.AtBottom, nil
+}
 
 func parseCandidates(items [][]string) []Candidate {
-	var candidates []Candidate
+	candidates := make([]Candidate, 0)
 	for _, lines := range items {
 		cand := parseCandidateLines(lines)
 		if cand.Name != "" {
@@ -61,9 +199,6 @@ func parseCandidates(items [][]string) []Candidate {
 
 func parseCandidateLines(lines []string) Candidate {
 	var cand Candidate
-	// BOSS chat list format (variations observed):
-	// [count, time, name, job, lastMsg] or [time, name, job, lastMsg]
-	// Skip count lines (pure numbers like "1", "2")
 	var filtered []string
 	for _, line := range lines {
 		if line == "" || isNoiseLine(line) {
@@ -89,12 +224,20 @@ func parseCandidateLines(lines []string) Candidate {
 }
 
 func isTimeLine(s string) bool {
-	// Matches patterns like "19:45", "04-17 13:12", "昨天 17:13"
+	// Matches patterns like "19:45", "04-17 13:12", "昨天", "06月10日", "刚刚"
+	if s == "昨天" || s == "刚刚" || s == "今天" {
+		return true
+	}
+	if strings.Contains(s, "月") && strings.Contains(s, "日") {
+		return true
+	}
+	if strings.Contains(s, "-") && strings.Contains(s, ":") {
+		return true
+	}
 	return strings.Contains(s, ":") && len(s) <= 12
 }
 
 func isNoiseLine(s string) bool {
-	// Skip pure number counts and navigation labels
 	if s == "" {
 		return true
 	}

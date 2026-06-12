@@ -108,12 +108,14 @@ func init() {
 		Short: "List candidates in current job filter",
 		Run: func(cmd *cobra.Command, args []string) {
 			status, _ := cmd.Flags().GetString("status")
+			all, _ := cmd.Flags().GetBool("all")
+			max, _ := cmd.Flags().GetInt("max")
 			client := newClient()
 			_, err := boss.CheckLogin(client)
 			if err != nil {
 				handleError("not_logged_in", "Please run login-status first and ensure you are logged in.", client)
 			}
-			candidates, err := boss.ListCandidates(client, strings.TrimSpace(status))
+			candidates, err := boss.ListCandidates(client, strings.TrimSpace(status), all, max)
 			if err != nil {
 				handleError("list_candidates_failed", err.Error(), client)
 			}
@@ -121,6 +123,8 @@ func init() {
 		},
 	}
 	listCandidatesCmd.Flags().String("status", "", "Filter by status: 新招呼, 沟通中, 已约面, 已获取简历, 已交换电话, 已交换微信, 收藏, 更多")
+	listCandidatesCmd.Flags().Bool("all", false, "Scroll through the virtual list and load all visible candidates")
+	listCandidatesCmd.Flags().Int("max", 0, "Maximum number of candidates to load (0 = unlimited, requires --all)")
 	rootCmd.AddCommand(listCandidatesCmd)
 
 	// send-message
