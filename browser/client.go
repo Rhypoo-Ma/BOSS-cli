@@ -3,7 +3,9 @@ package browser
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"image"
 	"net/http"
 	"strings"
 	"time"
@@ -105,6 +107,53 @@ func (c *Client) Click(selector string) error {
 
 func (c *Client) Snapshot() (json.RawMessage, error) {
 	return c.Call("snapshot", map[string]any{})
+}
+
+// GetBoundingRect returns the viewport-relative bounding rectangle of the first element matching selector.
+func (c *Client) GetBoundingRect(selector string) (image.Rectangle, error) {
+	escaped := strings.ReplaceAll(selector, `'`, `\'`)
+	code := fmt.Sprintf(`(function(){
+		var el = document.querySelector('%s');
+		if (!el) return JSON.stringify({error: 'element not found'});
+		var r = el.getBoundingClientRect();
+		return JSON.stringify({x: r.x, y: r.y, width: r.width, height: r.height});
+	})()`, escaped)
+	raw, err := c.EvaluateValue(code)
+	if err != nil {
+		return image.Rectangle{}, err
+	}
+	var r struct {
+		X      float64 `json:"x"`
+		Y      float64 `json:"y"`
+		Width  float64 `json:"width"`
+		Height float64 `json:"height"`
+		Error  string  `json:"error,omitempty"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return image.Rectangle{}, err
+	}
+	if r.Error != "" {
+		return image.Rectangle{}, errors.New(r.Error)
+	}
+	return image.Rect(int(r.X), int(r.Y), int(r.X+r.Width), int(r.Y+r.Height)), nil
+}
+
+// Screenshot captures the current browser viewport and returns the saved file path.
+func (c *Client) Screenshot(format string) (string, error) {
+	if format == "" {
+		format = "png"
+	}
+	raw, err := c.Call("screenshot", map[string]any{"format": format})
+	if err != nil {
+		return "", err
+	}
+	var result struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", err
+	}
+	return result.Path, nil
 }
 
 func (c *Client) NetworkStart() error  { _, err := c.Call("network", map[string]any{"cmd": "start"}); return err }

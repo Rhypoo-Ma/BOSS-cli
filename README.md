@@ -140,6 +140,30 @@ Keep the resume dialog open so you can scroll through it in the browser:
 ./BOSS-cli close-resume
 ```
 
+Search the resume for a keyword (case-insensitive) and get structured matches:
+
+```bash
+./BOSS-cli view-resume "候选人姓名" --keyword="AI"
+```
+
+BOSS renders the detailed online resume body via WebAssembly/canvas, so plain text extraction only covers the summary panel. To search the actual rendered resume (including work experience descriptions), use OCR on macOS:
+
+```bash
+./BOSS-cli view-resume "候选人姓名" --keyword="AI" --ocr
+```
+
+You can also pass comma-separated synonyms so that any of them counts as a match:
+
+```bash
+./BOSS-cli view-resume "候选人姓名" --keyword="达人,红人,KOL,创作者" --ocr
+```
+
+To ignore matches that only come from the job title (e.g. "AI达人营销"):
+
+```bash
+./BOSS-cli view-resume "候选人姓名" --keyword="达人,红人,KOL,创作者" --ocr --exclude-job-title
+```
+
 The extracted preview includes name, age, work years, education, work experience, and education history.
 
 ### Show version

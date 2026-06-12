@@ -2,6 +2,7 @@ package boss
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -23,6 +24,23 @@ type ResumePreview struct {
 	RawText          string   `json:"raw_text,omitempty"`
 }
 
+// FieldMatch describes a resume field that contains a keyword.
+type FieldMatch struct {
+	Field   string `json:"field"`
+	Text    string `json:"text"`
+	Keyword string `json:"keyword,omitempty"`
+}
+
+// ResumeSearchResult is the outcome of searching a resume preview for keywords.
+type ResumeSearchResult struct {
+	Keyword  string       `json:"keyword"`
+	Keywords []string     `json:"keywords,omitempty"`
+	Matched  bool         `json:"matched"`
+	Count    int          `json:"count"`
+	Matches  []FieldMatch `json:"matches,omitempty"`
+}
+
+
 type Work struct {
 	Period      string `json:"period"`
 	Company     string `json:"company"`
@@ -38,7 +56,8 @@ type Edu struct {
 }
 
 // OpenOnlineResume clicks the candidate and opens the online resume dialog.
-func OpenOnlineResume(client *browser.Client, name string) error {
+// It returns the job title shown in the chat detail panel before the dialog opens.
+func OpenOnlineResume(client *browser.Client, name string) (string, error) {
 	// Step 0: clean up any leftover resume dialogs from previous operations
 	if err := cleanupResumeDialogs(client); err != nil {
 		// Non-fatal; continue opening
@@ -46,9 +65,15 @@ func OpenOnlineResume(client *browser.Client, name string) error {
 
 	// Step 1: click candidate in the list
 	if err := clickCandidateByName(client, name); err != nil {
-		return err
+		return "", err
 	}
 	time.Sleep(800 * time.Millisecond)
+
+	// Capture the job title from the detail panel while it is still visible.
+	jobTitle := ""
+	if preview, err := ExtractResumePreview(client); err == nil {
+		jobTitle = strings.TrimSpace(preview.JobTitle)
+	}
 
 	// Step 2: click the online resume button
 	code := `(function(){
@@ -60,24 +85,24 @@ func OpenOnlineResume(client *browser.Client, name string) error {
 
 	raw, err := client.EvaluateValue(code)
 	if err != nil {
-		return fmt.Errorf("click online resume failed: %w", err)
+		return jobTitle, fmt.Errorf("click online resume failed: %w", err)
 	}
 	var result struct {
 		Success bool   `json:"success"`
 		Reason  string `json:"reason,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return fmt.Errorf("parse failed: %w", err)
+		return jobTitle, fmt.Errorf("parse failed: %w", err)
 	}
 	if !result.Success {
-		return fmt.Errorf(result.Reason)
+		return jobTitle, errors.New(result.Reason)
 	}
 
 	// Wait for the resume dialog to appear
 	if err := client.WaitForSelector(".resume-container, .resume-common-dialog, .new-resume-online-main-ui", 5*time.Second); err != nil {
-		return fmt.Errorf("resume dialog did not open: %w", err)
+		return jobTitle, fmt.Errorf("resume dialog did not open: %w", err)
 	}
-	return nil
+	return jobTitle, nil
 }
 
 // CloseOnlineResume closes the currently active online resume dialog.
@@ -117,7 +142,7 @@ func cleanupResumeDialogs(client *browser.Client) error {
 	}
 	json.Unmarshal(raw, &result)
 	if result.Reason != "" {
-		return fmt.Errorf(result.Reason)
+		return errors.New(result.Reason)
 	}
 	return nil
 }
@@ -141,7 +166,7 @@ func ScrollOnlineResume(client *browser.Client, pixels int) error {
 	}
 	json.Unmarshal(raw, &r)
 	if r.Error != "" {
-		return fmt.Errorf(r.Error)
+		return errors.New(r.Error)
 	}
 	return nil
 }
@@ -193,7 +218,7 @@ func ExtractResumePreview(client *browser.Client) (*ResumePreview, error) {
 		return nil, fmt.Errorf("parse failed: %w", err)
 	}
 	if data.Error != "" {
-		return nil, fmt.Errorf(data.Error)
+		return nil, errors.New(data.Error)
 	}
 	return buildResumePreview(data.Basic, data.Times, data.Details, data.Expectation, data.JobTitle, data.RawText), nil
 }
@@ -224,7 +249,7 @@ func clickCandidateByName(client *browser.Client, name string) error {
 		return fmt.Errorf("parse failed: %w", err)
 	}
 	if !result.Success {
-		return fmt.Errorf(result.Reason)
+		return errors.New(result.Reason)
 	}
 	return nil
 }
@@ -302,6 +327,96 @@ func isEducationDetail(s string) bool {
 		if strings.Contains(s, k) {
 			return true
 		}
+	}
+	return false
+}
+
+// SearchResume searches a resume preview for the given keywords (case-insensitive).
+// It checks all structured fields and the raw text snapshot.
+// When excludeJobTitle is true, matches that only come from the job title are ignored.
+func SearchResume(preview *ResumePreview, keywords []string, excludeJobTitle bool) *ResumeSearchResult {
+	result := &ResumeSearchResult{}
+	hasKeyword := false
+	for _, k := range keywords {
+		if strings.TrimSpace(k) != "" {
+			hasKeyword = true
+			break
+		}
+	}
+	if !hasKeyword || preview == nil {
+		return result
+	}
+	result.Keyword = keywords[0]
+	result.Keywords = keywords
+
+	jobTitle := strings.TrimSpace(preview.JobTitle)
+	isJobTitleOnly := func(field, text string) bool {
+		if !excludeJobTitle {
+			return false
+		}
+		if field == "job_title" {
+			return true
+		}
+		if field == "raw_text" && jobTitle != "" && strings.TrimSpace(text) == jobTitle {
+			return true
+		}
+		return false
+	}
+
+	add := func(field, text string) {
+		if text == "" {
+			return
+		}
+		if isJobTitleOnly(field, text) {
+			return
+		}
+		lower := strings.ToLower(text)
+		for _, kw := range keywords {
+			if keywordMatches(lower, kw) {
+				result.Matches = append(result.Matches, FieldMatch{Field: field, Text: text, Keyword: kw})
+				return
+			}
+		}
+	}
+
+	add("name", preview.Name)
+	add("age", preview.Age)
+	add("work_years", preview.WorkYears)
+	add("education_level", preview.EducationLevel)
+	add("expectation", preview.Expectation)
+	add("job_title", preview.JobTitle)
+	for _, tag := range preview.Tags {
+		add("tag", tag)
+	}
+	for i, w := range preview.WorkExperience {
+		add(fmt.Sprintf("work_experience.%d.period", i), w.Period)
+		add(fmt.Sprintf("work_experience.%d.company", i), w.Company)
+		add(fmt.Sprintf("work_experience.%d.position", i), w.Position)
+		add(fmt.Sprintf("work_experience.%d.description", i), w.Description)
+	}
+	for i, e := range preview.EducationHistory {
+		add(fmt.Sprintf("education_history.%d.period", i), e.Period)
+		add(fmt.Sprintf("education_history.%d.school", i), e.School)
+		add(fmt.Sprintf("education_history.%d.major", i), e.Major)
+		add(fmt.Sprintf("education_history.%d.degree", i), e.Degree)
+	}
+	// Raw text is checked last so it can surface fields not parsed above.
+	add("raw_text", preview.RawText)
+
+	result.Count = len(result.Matches)
+	result.Matched = result.Count > 0
+	return result
+}
+
+// keywordMatches checks whether text contains the keyword, including OCR-tolerant variants.
+func keywordMatches(lowerText, keyword string) bool {
+	kw := strings.ToLower(keyword)
+	if strings.Contains(lowerText, kw) {
+		return true
+	}
+	// Vision OCR often reads uppercase "AI" as "Al".
+	if kw == "ai" && strings.Contains(lowerText, "al") {
+		return true
 	}
 	return false
 }

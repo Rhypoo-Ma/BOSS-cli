@@ -2,6 +2,7 @@ package boss
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -181,7 +182,7 @@ func scrollList(client *browser.Client, step int) (bool, error) {
 		return false, fmt.Errorf("parse scroll result failed: %w", err)
 	}
 	if r.Error != "" {
-		return false, fmt.Errorf(r.Error)
+		return false, errors.New(r.Error)
 	}
 	return r.AtBottom, nil
 }

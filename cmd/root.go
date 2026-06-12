@@ -28,6 +28,19 @@ func newClient() *browser.Client {
 	return client
 }
 
+// parseKeywords splits a comma-separated keyword string and trims empty entries.
+func parseKeywords(s string) []string {
+	parts := strings.Split(s, ",")
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func handleError(code, message string, client *browser.Client) {
 	if debug && client != nil {
 		if snap, err := client.Snapshot(); err == nil {
@@ -180,7 +193,8 @@ func init() {
 			if err != nil {
 				handleError("not_logged_in", "Please run login-status first and ensure you are logged in.", client)
 			}
-			if err := boss.OpenOnlineResume(client, args[0]); err != nil {
+			_, err = boss.OpenOnlineResume(client, args[0])
+			if err != nil {
 				handleError("open_resume_failed", err.Error(), client)
 			}
 			preview, err := boss.ExtractResumePreview(client)
@@ -190,10 +204,29 @@ func init() {
 			if !keepOpen {
 				_ = boss.CloseOnlineResume(client)
 			}
-			output.Success(preview)
+			keyword, _ := cmd.Flags().GetString("keyword")
+			useOCR, _ := cmd.Flags().GetBool("ocr")
+			excludeJobTitle, _ := cmd.Flags().GetBool("exclude-job-title")
+			if keyword == "" {
+				output.Success(preview)
+				return
+			}
+			keywords := parseKeywords(keyword)
+			if useOCR {
+				ocrResult, err := boss.SearchResumeWithOCR(client, args[0], keywords, excludeJobTitle)
+				if err != nil {
+					handleError("ocr_search_failed", err.Error(), client)
+				}
+				output.Success(ocrResult)
+			} else {
+				output.Success(boss.SearchResume(preview, keywords, excludeJobTitle))
+			}
 		},
 	}
 	viewResumeCmd.Flags().Bool("keep-open", false, "Keep the resume dialog open after extraction")
+	viewResumeCmd.Flags().String("keyword", "", "Comma-separated keywords to search in the resume")
+	viewResumeCmd.Flags().Bool("ocr", false, "Use OCR on the online resume screenshot for keyword search (macOS only)")
+	viewResumeCmd.Flags().Bool("exclude-job-title", false, "Ignore matches that only come from the job title 'AI达人营销'")
 	rootCmd.AddCommand(viewResumeCmd)
 
 	// close-resume
